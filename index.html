@@ -3,23 +3,181 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Name - Portfolio</title>
-    <link rel="stylesheet" href="css/style.css">
-    <!-- Add Font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Add metadata for SEO -->
-    <meta name="description" content="ジョシュア　アンダーウッドのポートフォリオ">
-    <meta name="keywords" content="開発者, ポートフォリオ, WEB開発">
-    <link rel="icon" type="image/png" href="https://github.com/newleafdev.png">
+    <title>Portfolio - Project Grid</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(-45deg, #2c1810, #4a1828, #0d3b4a, #0a4a3b);
+            background-size: 400% 400%;
+            animation: gradient 15s ease infinite;
+            min-height: 100vh;
+            color: white;
+            perspective: 1000px;
+        }
+
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .header {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .header h1 {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.5rem;
+            opacity: 0.9;
+            max-width: 600px;
+            line-height: 1.6;
+        }
+
+        .scroll-indicator {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            animation: bounce 2s infinite;
+        }
+
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-30px); }
+            60% { transform: translateY(-15px); }
+        }
+
+        .projects-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2rem;
+            padding: 4rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 2rem;
+            transform-style: preserve-3d;
+            transition: transform 0.5s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            min-height: 400px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                120deg,
+                transparent,
+                rgba(255, 255, 255, 0.3),
+                transparent
+            );
+            transform: translateX(-100%);
+            transition: 0.5s;
+        }
+
+        .card:hover::before {
+            transform: translateX(100%);
+        }
+
+        .card-content {
+            transform-style: preserve-3d;
+        }
+
+        .card-title {
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+            transform: translateZ(40px);
+        }
+
+        .card-description {
+            font-size: 1rem;
+            line-height: 1.6;
+            margin-bottom: 2rem;
+            opacity: 0.9;
+            transform: translateZ(30px);
+        }
+
+        .tech-stack {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+        }
+
+        .tech-badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            transform: translateZ(20px);
+        }
+
+        .card-link {
+            display: inline-block;
+            padding: 0.8rem 1.5rem;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 25px;
+            text-decoration: none;
+            color: white;
+            font-weight: bold;
+            transform: translateZ(30px);
+            transition: background 0.3s ease;
+        }
+
+        .card-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        @media (max-width: 1200px) {
+            .projects-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .projects-grid {
+                grid-template-columns: 1fr;
+                padding: 2rem;
+            }
+            .header h1 {
+                font-size: 2.5rem;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="header">
-        <h1>Your Name</h1>
-        <p>Full-stack developer crafting beautiful and functional web experiences</p>
-        <div class="social-links">
-            <a href="https://github.com/newleafdev" target="_blank" rel="noopener noreferrer">GitHub</a>
-            <a href="mailto:joshua.underwood@mac.com">Email</a>
-        </div>
+        <h1>アンダーウッド　ジョシュア</h1>
+        <p>プログラミングを学んでいるイギリス人です。</p>
         <div class="scroll-indicator">↓</div>
     </div>
 
@@ -27,10 +185,89 @@
         <!-- Cards will be dynamically generated here -->
     </div>
 
-    <footer>
-        <p>© <span id="current-year"></span> ジョシュア　アンダーウッド</p>
-    </footer>
+    <script>
+        const projects = [
+            {
+                title: "回帰的なセル・オートマトン",
+                description: "再帰的アルゴリズムを用いてセル・オートマトンの挙動を解析する研究を行っています。",
+                techStack: ["C++", "Python", "Jupyter", "Pandas", "networkX"],
+                link: "https://example.com/project1"
+            },
+            {
+                title: "AI ウエッブサイトアナリスト",
+                description: "PythonとOllamaを活用したウェブサイト要約ツールを開発しています。",
+                techStack: ["Python", "Ollama", "HTML/CSS", "Flask"],
+                link: "https://example.com/project2"
+            },
+            {
+                title: "NLPでJRPGを分析",
+                description: "JRPGのスクリプトを比較して、相対的な読解難易度を評価する言語エントロピー分析を行っています。",
+                techStack: ["Python", "Jupyter", "Pandas", "nltk"],
+                link: "https://example.com/project3"
+            },
+            {
+                title: "AnagramA",
+                description: "ランダムな単語から新しい言葉を作り出す、楽しく学べる語彙ゲーム！",
+                techStack: ["Swift", "SwiftUI"],
+                link: "https://example.com/project4"
+            }
+        ];
 
-    <script src="js/main.js"></script>
+        const projectsGrid = document.querySelector('.projects-grid');
+
+        // Create cards
+        projects.forEach(project => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            
+            const content = `
+                <div class="card-content">
+                    <h2 class="card-title">${project.title}</h2>
+                    <p class="card-description">${project.description}</p>
+                    <div class="tech-stack">
+                        ${project.techStack.map(tech => `
+                            <span class="tech-badge">${tech}</span>
+                        `).join('')}
+                    </div>
+                    <a href="${project.link}" class="card-link" target="_blank">View Project</a>
+                </div>
+            `;
+            
+            card.innerHTML = content;
+            projectsGrid.appendChild(card);
+
+            // Add tilt effect
+            card.addEventListener('mousemove', handleTilt);
+            card.addEventListener('mouseleave', resetTilt);
+        });
+
+        function handleTilt(e) {
+            const card = e.currentTarget;
+            const rect = card.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            
+            const rotateX = (y - centerY) / 10;
+            const rotateY = -(x - centerX) / 10;
+            
+            card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.05, 1.05, 1.05)`;
+        }
+
+        function resetTilt(e) {
+            const card = e.currentTarget;
+            card.style.transform = 'perspective(1000px) rotateX(0) rotateY(0) scale3d(1, 1, 1)';
+        }
+
+        // Smooth scroll for the arrow indicator
+        document.querySelector('.scroll-indicator').addEventListener('click', () => {
+            window.scrollTo({
+                top: window.innerHeight,
+                behavior: 'smooth'
+            });
+        });
+    </script>
 </body>
 </html>
