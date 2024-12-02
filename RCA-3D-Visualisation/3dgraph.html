@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Force-Directed 3D Network Graph</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+        }
+        #controls {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Interactive 3D Network Graph<br>Click nodes to trigger ripple effects<br>Use mouse wheel to zoom</div>
+    <div id="controls">
+        <h3>Custom Graph Input</h3>
+        <div>
+            <h4>Nodes:</h4>
+            <textarea id="nodesInput" placeholder="Enter nodes (one per line) with optional x,y,z coordinates:
+Node1
+Node2,10,5,-3
+Node3,-5,2,8"></textarea>
+        </div>
+        <div>
+            <h4>Edges:</h4>
+            <textarea id="edgesInput" placeholder="Enter edges (one per line) as source,target:
+Node1,Node2
+Node2,Node3
+Node1,Node3"></textarea>
+        </div>
+        <button onclick="updateGraph()">Update Graph</button>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Set up scene
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Camera position and zoom settings
+        camera.position.z = 30;
+        let targetZoom = 30;
+        const ZOOM_SPEED = 0.1;
+        const MIN_ZOOM = 5;
+        const MAX_ZOOM = 100;
+
+        // Force-directed graph parameters
+        const ATTRACTION_FORCE = 0.03;  // Force between connected nodes
+        const REPULSION_FORCE = 0.01;   // Force between unconnected nodes
+        const DAMPING = 0.7;            // Velocity damping
+        const MAX_VELOCITY = 0.5;       // Maximum node velocity
+
+        // Initialize arrays
+        let nodes = [];
+        let edges = [];
+        let nodeMap = new Map();
+
+        // Materials
+        function createNodeMaterial(connectionCount, maxConnections) {
+            // Calculate color based on connection count (blue to red spectrum)
+            const t = Math.min(connectionCount / maxConnections, 1);
+            const r = Math.min(t * 2, 1);                    // Red increases first
+            const g = Math.max(0, Math.min(2 - t * 2, 1));  // Green peaks in middle
+            const b = Math.max(0, 1 - t * 2);               // Blue decreases first
+
+            return new THREE.MeshPhongMaterial({
+                color: new THREE.Color(r, g, b),
+                transparent: true,
+                opacity: 0.7,
+                specular: 0xffffff,
+                shininess: 100,
+                refractionRatio: 0.98
+            });
+        }
+
+        const lineMaterial = new THREE.LineBasicMaterial({
+            color: 0x88ccff,
+            transparent: true,
+            opacity: 0.5
+        });
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        const light1 = new THREE.PointLight(0xffffff, 1, 100);
+        light1.position.set(10, 10, 10);
+        scene.add(light1);
+
+        const light2 = new THREE.PointLight(0xffffff, 1, 100);
+        light2.position.set(-10, -10, -10);
+        scene.add(light2);
+
+        function clearGraph() {
+            nodes.forEach(node => scene.remove(node));
+            edges.forEach(edge => scene.remove(edge.line));
+            nodes = [];
+            edges = [];
+            nodeMap.clear();
+        }
+
+        function createNode(name, x, y, z) {
+            const geometry = new THREE.SphereGeometry(1, 32, 32);
+            const sphere = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial());
+            
+            sphere.position.set(x, y, z);
+            sphere.velocity = new THREE.Vector3();
+            sphere.force = new THREE.Vector3();
+            
+            sphere.userData = {
+                name: name,
+                glowIntensity: 0,
+                connections: []
+            };
+            
+            return sphere;
+        }
+
+        function updateNodeColors() {
+            // Find maximum number of connections
+            const maxConnections = Math.max(...nodes.map(node => node.userData.connections.length));
+            
+            // Update each node's color based on its number of connections
+            nodes.forEach(node => {
+                const connectionCount = node.userData.connections.length;
+                node.material = createNodeMaterial(connectionCount, maxConnections);
+            });
+        }
+
+        function updateGraph() {
+            clearGraph();
+
+            // Parse nodes
+            const nodesText = document.getElementById('nodesInput').value.trim();
+            const nodeLines = nodesText.split('\n').filter(line => line.trim());
+
+            nodeLines.forEach((line, index) => {
+                const parts = line.trim().split(',');
+                const name = parts[0];
+                const x = parts.length > 1 ? parseFloat(parts[1]) : (Math.random() - 0.5) * 40;
+                const y = parts.length > 2 ? parseFloat(parts[2]) : (Math.random() - 0.5) * 40;
+                const z = parts.length > 3 ? parseFloat(parts[3]) : (Math.random() - 0.5) * 40;
+
+                const node = createNode(name, x, y, z);
+                nodes.push(node);
+                nodeMap.set(name, nodes.length - 1);
+                scene.add(node);
+            });
+
+            // Parse edges
+            const edgesText = document.getElementById('edgesInput').value.trim();
+            const edgeLines = edgesText.split('\n').filter(line => line.trim());
+
+            edgeLines.forEach(line => {
+                const [source, target] = line.trim().split(',');
+                const sourceIndex = nodeMap.get(source);
+                const targetIndex = nodeMap.get(target);
+
+                if (sourceIndex !== undefined && targetIndex !== undefined) {
+                    const geometry = new THREE.BufferGeometry().setFromPoints([
+                        nodes[sourceIndex].position,
+                        nodes[targetIndex].position
+                    ]);
+                    const line = new THREE.Line(geometry, lineMaterial);
+                    edges.push({
+                        line: line,
+                        source: sourceIndex,
+                        target: targetIndex
+                    });
+                    nodes[sourceIndex].userData.connections.push(targetIndex);
+                    nodes[targetIndex].userData.connections.push(sourceIndex);
+                    scene.add(line);
+                }
+            });
+
+            updateNodeColors();
+        }
+
+        function applyForces() {
+            // Reset forces
+            nodes.forEach(node => {
+                node.force.set(0, 0, 0);
+            });
+
+            // Apply forces between all pairs of nodes
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const nodeA = nodes[i];
+                    const nodeB = nodes[j];
+                    
+                    const direction = new THREE.Vector3()
+                        .subVectors(nodeB.position, nodeA.position);
+                    const distance = direction.length();
+                    direction.normalize();
+
+                    // Check if nodes are connected
+                    const isConnected = nodeA.userData.connections.includes(j);
+                    
+                    if (isConnected) {
+                        // Attraction force between connected nodes
+                        const force = direction.multiplyScalar(ATTRACTION_FORCE * (distance - 5));
+                        nodeA.force.add(force);
+                        nodeB.force.sub(force.clone());
+                    } else {
+                        // Repulsion force between unconnected nodes
+                        const force = direction.multiplyScalar(-REPULSION_FORCE / (distance * distance));
+                        nodeA.force.add(force);
+                        nodeB.force.sub(force.clone());
+                    }
+                }
+            }
+
+            // Update velocities and positions
+            nodes.forEach(node => {
+                node.velocity.add(node.force);
+                node.velocity.multiplyScalar(DAMPING);
+                
+                // Limit maximum velocity
+                if (node.velocity.length() > MAX_VELOCITY) {
+                    node.velocity.normalize().multiplyScalar(MAX_VELOCITY);
+                }
+                
+                node.position.add(node.velocity);
+            });
+        }
+
+        // Mouse interaction
+        const mouse = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+
+        document.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        document.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            if (event.deltaY < 0) {
+                targetZoom = Math.max(MIN_ZOOM, targetZoom - ZOOM_SPEED * targetZoom);
+            } else {
+                targetZoom = Math.min(MAX_ZOOM, targetZoom + ZOOM_SPEED * targetZoom);
+            }
+        }, { passive: false });
+
+        document.addEventListener('click', (event) => {
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(nodes);
+            
+            if (intersects.length > 0) {
+                const clickedNode = intersects[0].object;
+                triggerRippleEffect(nodes.indexOf(clickedNode));
+            }
+        });
+
+        function triggerRippleEffect(nodeIndex) {
+            nodes[nodeIndex].userData.glowIntensity = 1;
+            
+            const connectedNodes = nodes[nodeIndex].userData.connections;
+            connectedNodes.forEach((targetIndex, i) => {
+                setTimeout(() => {
+                    nodes[targetIndex].userData.glowIntensity = 0.7;
+                }, i * 150);
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Apply force-directed graph physics
+            applyForces();
+
+            // Smooth camera zoom
+            const currentRadius = Math.sqrt(
+                camera.position.x * camera.position.x + 
+                camera.position.z * camera.position.z
+            );
+            const zoomFactor = targetZoom / currentRadius;
+            camera.position.x *= zoomFactor;
+            camera.position.z *= zoomFactor;
+
+            // Update nodes
+            nodes.forEach(node => {
+                // Update glow effect
+                if (node.userData.glowIntensity > 0) {
+                    node.userData.glowIntensity *= 0.95;
+                    node.material.emissive.setRGB(
+                        node.userData.glowIntensity,
+                        node.userData.glowIntensity,
+                        node.userData.glowIntensity
+                    );
+                }
+            });
+
+            // Update edges
+            edges.forEach(edge => {
+                edge.line.geometry.setFromPoints([
+                    nodes[edge.source].position,
+                    nodes[edge.target].position
+                ]);
+                edge.line.geometry.verticesNeedUpdate = true;
+            });
+
+            // Rotate camera slowly
+            const angle = Date.now() * 0.0001;
+            const radius = Math.sqrt(camera.position.x * camera.position.x + camera.position.z * camera.position.z);
+            camera.position.x = Math.sin(angle) * radius;
+            camera.position.z = Math.cos(angle) * radius;
+            camera.lookAt(scene.position);
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize with example data
+        document.getElementById('nodesInput').value = '0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n';
+        document.getElementById('edgesInput').value = '72,180\n135,179\n240,135\n193,159\n143,231\n21,10\n14,2\n22,14\n129,61\n226,47\n169,45\n137,101\n154,88\n233,207\n166,226\n231,235\n243,247\n82,132\n90,152\n145,5\n97,2\n138,96\n44,50\n236,19\n1,0\n126,194\n45,178\n180,236\n221,187\n54,62\n215,239\n81,2\n175,247\n244,141\n220,179\n71,139\n139,225\n207,247\n57,180\n13,130\n213,171\n102,170\n87,175\n210,197\n113,98\n49,32\n58,42\n214,239\n106,170\n117,238\n78,178\n41,172\n118,222\n134,50\n234,43\n55,63\n167,227\n60,34\n7,3\n128,62\n92,178\n76,178\n205,179\n200,55\n65,2\n247,255\n101,142\n66,132\n250,139\n94,178\n216,151\n124,194\n245,239\n61,186\n131,185\n203,241\n173,115\n59,187\n146,0\n189,123\n206,115\n164,228\n147,131\n211,199\n188,226\n152,86\n96,128\n162,170\n249,247\n103,171\n17,0\n35,33\n190,226\n228,13\n104,140\n18,0\n242,151\n33,32\n254,131\n130,56\n157,91\n227,237\n25,148\n70,138\n69,138\n142,98\n91,27\n241,231\n246,159\n222,243\n107,41\n4,0\n232,15\n56,36\n115,119\n100,140\n127,255\n8,4\n159,223\n248,135\n2,0\n86,174\n112,192\n73,54\n140,98\n181,111\n40,44\n168,174\n136,102\n105,14\n229,207\n148,8\n218,217\n208,135\n186,170\n150,14\n9,132\n108,146\n116,204\n48,32\n197,155\n196,25\n23,15\n16,0\n201,183\n5,2\n75,49\n161,45\n155,219\n6,2\n37,38\n209,135\n89,22\n11,129\n10,0\n160,174\n83,7\n31,159\n15,135\n182,254\n85,170\n199,219\n217,151\n52,44\n158,82\n119,255\n191,255\n110,178\n26,24\n174,242\n67,5\n192,31\n109,146\n27,155\n224,15\n235,233\n163,169\n95,191\n80,128\n46,50\n30,18\n156,82\n198,91\n184,166\n20,8\n38,34\n47,183\n24,20\n121,118\n74,176\n114,214\n93,186\n165,103\n151,143\n238,51\n3,1\n43,169\n204,51\n53,46\n230,43\n144,6\n141,99\n12,2\n88,148\n77,178\n99,37\n225,207\n171,169\n253,251\n149,11\n84,168\n185,53\n194,93\n19,3\n237,211\n79,183\n172,242\n39,35\n120,196\n153,85\n177,37\n68,136\n239,247\n183,255\n252,131\n125,250\n176,166\n64,128\n195,221\n133,51\n28,18\n132,48\n29,154\n111,183\n63,191\n212,169\n98,166\n122,202\n223,255\n62,34\n202,113';
+        updateGraph();
+        animate();
+    </script>
+</body>
+</html>
