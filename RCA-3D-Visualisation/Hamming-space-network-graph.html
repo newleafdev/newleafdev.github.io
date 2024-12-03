@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Force-Directed 3D Network Graph</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #info {
+            display: none;
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+        }
+        #controls {
+            position: absolute;
+            top: 60px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+        }
+        textarea {
+            width: 300px;
+            height: 150px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.9);
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 5px 0;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .slider-container {
+            margin: 10px 0;
+        }
+        .slider-container label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        .slider-value {
+            margin-left: 10px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Interactive 3D Network Graph<br>Click nodes to trigger ripple effects<br>Use mouse wheel to zoom</div>
+    <div id="controls">
+        <h3>Graph Input</h3>
+        <div>
+            <h4>Nodes:</h4>
+            <textarea id="nodesInput" placeholder="Enter nodes (one per line) with optional x,y,z coordinates:
+Node1
+Node2,10,5,-3
+Node3,-5,2,8"></textarea>
+        </div>
+        <div>
+            <h4>Edges:</h4>
+            <textarea id="edgesInput" placeholder="Enter edges (one per line) as source,target:
+Node1,Node2
+Node2,Node3
+Node1,Node3"></textarea>
+        </div>
+        <div class="slider-container">
+            <label for="distanceSlider">Node Distance:</label>
+            <input type="range" id="distanceSlider" min="1" max="20" step="0.5" value="2">
+            <span id="distanceValue" class="slider-value">2</span>
+        </div>
+        <button onclick="updateGraph()">Update Graph</button>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Set up scene
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Camera position and zoom settings
+        camera.position.z = 100;
+        let targetZoom = 100;
+        const ZOOM_SPEED = 0.1;
+        const MIN_ZOOM = 20;
+        const MAX_ZOOM = 200;
+
+        // Force-directed graph parameters
+        const ATTRACTION_FORCE = 0.01;
+        const REPULSION_FORCE = 0.005;
+        const DAMPING = 0.8;
+        const MAX_VELOCITY = 0.3;
+        let IDEAL_DISTANCE = 10; // Now controlled by slider
+
+        // Initialize arrays
+        let nodes = [];
+        let edges = [];
+        let nodeMap = new Map();
+
+        // Initialize distance slider
+        const distanceSlider = document.getElementById('distanceSlider');
+        const distanceValue = document.getElementById('distanceValue');
+        
+        distanceSlider.addEventListener('input', function() {
+            IDEAL_DISTANCE = parseFloat(this.value);
+            distanceValue.textContent = this.value;
+        });
+
+        // Materials
+        function createNodeMaterial(connectionCount, maxConnections) {
+            const t = Math.min(connectionCount / maxConnections, 1);
+            const r = Math.min(t * 2, 1);
+            const g = Math.max(0, Math.min(2 - t * 2, 1));
+            const b = Math.max(0, 1 - t * 2);
+
+            return new THREE.MeshPhongMaterial({
+                color: new THREE.Color(r, g, b),
+                transparent: true,
+                opacity: 0.7,
+                specular: 0xffffff,
+                shininess: 100,
+                refractionRatio: 0.98
+            });
+        }
+
+        const lineMaterial = new THREE.LineBasicMaterial({
+            color: 0x88ccff,
+            transparent: true,
+            opacity: 0.3
+        });
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        const light1 = new THREE.PointLight(0xffffff, 1, 200);
+        light1.position.set(20, 20, 20);
+        scene.add(light1);
+
+        const light2 = new THREE.PointLight(0xffffff, 1, 200);
+        light2.position.set(-20, -20, -20);
+        scene.add(light2);
+
+        function clearGraph() {
+            nodes.forEach(node => scene.remove(node));
+            edges.forEach(edge => scene.remove(edge.line));
+            nodes = [];
+            edges = [];
+            nodeMap.clear();
+        }
+
+        function createNode(name, x, y, z) {
+            const geometry = new THREE.SphereGeometry(0.3, 16, 16);
+            const sphere = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial());
+            
+            sphere.position.set(x, y, z);
+            sphere.velocity = new THREE.Vector3();
+            sphere.force = new THREE.Vector3();
+            
+            sphere.userData = {
+                name: name,
+                glowIntensity: 0,
+                connections: []
+            };
+            
+            return sphere;
+        }
+
+        function updateNodeColors() {
+            const maxConnections = Math.max(...nodes.map(node => node.userData.connections.length));
+            nodes.forEach(node => {
+                const connectionCount = node.userData.connections.length;
+                node.material = createNodeMaterial(connectionCount, maxConnections);
+            });
+        }
+
+        function updateGraph() {
+            clearGraph();
+
+            // Parse nodes
+            const nodesText = document.getElementById('nodesInput').value.trim();
+            const nodeLines = nodesText.split('\n').filter(line => line.trim());
+
+            nodeLines.forEach((line, index) => {
+                const parts = line.trim().split(',');
+                const name = parts[0];
+                const x = parts.length > 1 ? parseFloat(parts[1]) : (Math.random() - 0.5) * 80;
+                const y = parts.length > 2 ? parseFloat(parts[2]) : (Math.random() - 0.5) * 80;
+                const z = parts.length > 3 ? parseFloat(parts[3]) : (Math.random() - 0.5) * 80;
+
+                const node = createNode(name, x, y, z);
+                nodes.push(node);
+                nodeMap.set(name, nodes.length - 1);
+                scene.add(node);
+            });
+
+            // Parse edges
+            const edgesText = document.getElementById('edgesInput').value.trim();
+            const edgeLines = edgesText.split('\n').filter(line => line.trim());
+
+            edgeLines.forEach(line => {
+                const [source, target] = line.trim().split(',');
+                const sourceIndex = nodeMap.get(source);
+                const targetIndex = nodeMap.get(target);
+
+                if (sourceIndex !== undefined && targetIndex !== undefined) {
+                    const geometry = new THREE.BufferGeometry().setFromPoints([
+                        nodes[sourceIndex].position,
+                        nodes[targetIndex].position
+                    ]);
+                    const line = new THREE.Line(geometry, lineMaterial);
+                    edges.push({
+                        line: line,
+                        source: sourceIndex,
+                        target: targetIndex
+                    });
+                    nodes[sourceIndex].userData.connections.push(targetIndex);
+                    nodes[targetIndex].userData.connections.push(sourceIndex);
+                    scene.add(line);
+                }
+            });
+
+            updateNodeColors();
+        }
+
+        function applyForces() {
+            nodes.forEach(node => {
+                node.force.set(0, 0, 0);
+            });
+
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const nodeA = nodes[i];
+                    const nodeB = nodes[j];
+                    
+                    const direction = new THREE.Vector3()
+                        .subVectors(nodeB.position, nodeA.position);
+                    const distance = direction.length();
+                    direction.normalize();
+
+                    const isConnected = nodeA.userData.connections.includes(j);
+                    
+                    if (isConnected) {
+                        // Use IDEAL_DISTANCE from slider for connected nodes
+                        const force = direction.multiplyScalar(ATTRACTION_FORCE * (distance - IDEAL_DISTANCE));
+                        nodeA.force.add(force);
+                        nodeB.force.sub(force.clone());
+                    } else {
+                        // Adjust repulsion based on IDEAL_DISTANCE
+                        const force = direction.multiplyScalar(-REPULSION_FORCE * IDEAL_DISTANCE / (distance * distance));
+                        nodeA.force.add(force);
+                        nodeB.force.sub(force.clone());
+                    }
+                }
+            }
+
+            nodes.forEach(node => {
+                node.velocity.add(node.force);
+                node.velocity.multiplyScalar(DAMPING);
+                
+                if (node.velocity.length() > MAX_VELOCITY) {
+                    node.velocity.normalize().multiplyScalar(MAX_VELOCITY);
+                }
+                
+                node.position.add(node.velocity);
+            });
+        }
+
+        // Mouse interaction
+        const mouse = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+
+        document.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        document.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            if (event.deltaY < 0) {
+                targetZoom = Math.max(MIN_ZOOM, targetZoom - ZOOM_SPEED * targetZoom);
+            } else {
+                targetZoom = Math.min(MAX_ZOOM, targetZoom + ZOOM_SPEED * targetZoom);
+            }
+        }, { passive: false });
+
+        document.addEventListener('click', (event) => {
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(nodes);
+            
+            if (intersects.length > 0) {
+                const clickedNode = intersects[0].object;
+                triggerRippleEffect(nodes.indexOf(clickedNode));
+            }
+        });
+
+        function triggerRippleEffect(nodeIndex) {
+            nodes[nodeIndex].userData.glowIntensity = 1;
+            
+            const connectedNodes = nodes[nodeIndex].userData.connections;
+            connectedNodes.forEach((targetIndex, i) => {
+                setTimeout(() => {
+                    nodes[targetIndex].userData.glowIntensity = 0.7;
+                }, i * 150);
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            applyForces();
+
+            const currentRadius = Math.sqrt(
+                camera.position.x * camera.position.x + 
+                camera.position.z * camera.position.z
+            );
+            const zoomFactor = targetZoom / currentRadius;
+            camera.position.x *= zoomFactor;
+            camera.position.z *= zoomFactor;
+
+            nodes.forEach(node => {
+                if (node.userData.glowIntensity > 0) {
+                    node.userData.glowIntensity *= 0.95;
+                    node.material.emissive.setRGB(
+                        node.userData.glowIntensity,
+                        node.userData.glowIntensity,
+                        node.userData.glowIntensity
+                    );
+                }
+            });
+
+            edges.forEach(edge => {
+                edge.line.geometry.setFromPoints([
+                    nodes[edge.source].position,
+                    nodes[edge.target].position
+                ]);
+                edge.line.geometry.verticesNeedUpdate = true;
+            });
+
+            const angle = Date.now() * 0.0001;
+            const radius = Math.sqrt(camera.position.x * camera.position.x + camera.position.z * camera.position.z);
+            camera.position.x = Math.sin(angle) * radius;
+            camera.position.z = Math.cos(angle) * radius;
+            camera.lookAt(scene.position);
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize with example data
+        document.getElementById('nodesInput').value = '0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n';
+        document.getElementById('edgesInput').value = '177,181\n24,88\n247,255\n26,30\n96,104\n18,26\n229,237\n8,9\n176,240\n40,41\n210,214\n57,121\n100,101\n129,137\n148,150\n122,250\n132,133\n149,213\n192,193\n240,242\n58,122\n243,247\n162,170\n181,183\n150,214\n14,15\n182,246\n144,152\n31,95\n74,75\n103,111\n106,107\n84,116\n166,167\n195,203\n63,191\n183,247\n217,249\n226,227\n32,96\n177,185\n158,190\n156,220\n118,126\n5,69\n228,236\n48,49\n80,81\n209,241\n218,222\n210,218\n140,141\n37,165\n157,221\n189,253\n6,70\n150,182\n151,159\n232,233\n25,29\n88,216\n132,164\n243,251\n91,123\n22,23\n51,59\n70,198\n3,19\n29,157\n39,103\n190,254\n114,115\n11,139\n121,249\n131,195\n206,207\n36,52\n62,190\n88,90\n216,248\n59,63\n65,97\n96,112\n128,144\n44,172\n164,228\n180,182\n29,31\n3,131\n157,189\n198,230\n6,38\n69,85\n95,223\n121,123\n139,171\n129,145\n161,177\n213,215\n10,26\n36,164\n80,112\n184,188\n240,241\n33,37\n96,224\n102,118\n18,146\n131,163\n162,178\n4,68\n194,210\n43,59\n69,197\n217,221\n223,255\n66,70\n72,104\n103,119\n176,180\n135,151\n17,25\n36,38\n10,138\n214,215\n195,211\n227,243\n96,98\n76,92\n102,230\n128,130\n250,254\n99,103\n136,152\n188,190\n58,62\n168,184\n220,222\n50,58\n69,71\n43,171\n38,102\n197,229\n228,244\n40,44\n77,93\n103,231\n129,131\n161,163\n130,194\n169,185\n221,223\n91,95\n253,255\n54,55\n76,204\n224,228\n73,77\n110,126\n146,147\n32,36\n163,227\n12,76\n202,218\n84,92\n77,205\n106,110\n176,184\n143,159\n65,69\n28,29\n76,78\n9,25\n45,109\n235,251\n88,89\n117,125\n136,138\n110,238\n120,121\n168,170\n137,201\n139,143\n180,181\n209,217\n228,230\n98,102\n77,79\n51,179\n46,110\n42,58\n80,84\n150,158\n169,171\n138,202\n134,150\n2,3\n170,234\n242,250\n19,83\n62,63\n12,44\n131,135\n94,95\n75,91\n224,232\n154,155\n183,191\n32,40\n72,76\n171,235\n246,247\n52,116\n13,45\n108,124\n144,208\n9,11\n36,37\n65,73\n68,69\n53,117\n198,206\n128,129\n109,125\n6,14\n145,209\n160,161\n177,241\n138,170\n220,221\n26,90\n201,217\n98,106\n79,111\n142,158\n39,47\n10,11\n178,242\n17,145\n27,91\n20,52\n234,250\n102,103\n131,139\n109,237\n151,215\n16,18\n194,195\n175,191\n50,178\n60,124\n204,236\n164,172\n152,216\n17,19\n1,65\n145,177\n49,51\n76,77\n109,111\n83,211\n86,118\n168,169\n197,205\n201,203\n185,249\n24,152\n27,59\n84,212\n116,244\n113,117\n57,185\n211,243\n117,245\n24,26\n146,150\n152,184\n231,239\n1,33\n25,89\n105,109\n58,186\n212,244\n64,80\n90,218\n116,118\n93,125\n176,178\n208,210\n38,46\n5,21\n31,159\n57,59\n179,183\n138,142\n117,119\n91,219\n130,138\n97,113\n123,251\n149,151\n120,124\n209,211\n241,243\n32,160\n42,43\n71,79\n64,192\n59,123\n218,250\n171,175\n124,252\n134,135\n5,133\n0,64\n153,157\n112,116\n65,193\n219,251\n97,225\n131,147\n6,134\n16,17\n64,66\n184,248\n33,97\n145,149\n124,126\n98,226\n108,109\n156,158\n5,7\n164,180\n216,218\n248,250\n65,67\n39,167\n193,225\n97,99\n178,182\n157,159\n27,31\n189,191\n19,27\n158,222\n160,164\n7,71\n197,213\n230,238\n50,51\n0,32\n249,251\n72,200\n82,83\n142,143\n92,124\n211,215\n20,28\n159,223\n52,60\n191,255\n4,20\n40,104\n234,235\n112,120\n152,156\n1,5\n132,196\n24,25\n53,61\n72,74\n56,57\n85,93\n37,53\n116,117\n66,98\n145,153\n164,166\n133,197\n185,189\n165,229\n208,209\n4,132\n14,78\n86,94\n7,39\n38,54\n70,86\n186,190\n67,99\n178,186\n197,199\n130,146\n166,230\n30,31\n159,191\n11,27\n47,111\n8,40\n90,91\n119,127\n200,201\n71,87\n139,203\n219,223\n4,6\n182,183\n211,219\n163,179\n12,28\n38,166\n192,224\n44,60\n73,105\n104,120\n1,9\n140,204\n172,236\n133,165\n212,220\n37,39\n244,252\n196,212\n64,65\n14,46\n174,175\n45,61\n71,199\n193,197\n74,106\n156,157\n137,153\n173,237\n245,253\n12,140\n248,249\n15,47\n229,245\n78,94\n104,232\n0,4\n170,186\n148,149\n45,173\n199,231\n105,233\n111,127\n147,211\n12,14\n140,172\n44,46\n222,223\n203,219\n46,174\n200,232\n104,106\n78,206\n81,113\n34,38\n196,198\n122,123\n141,173\n45,47\n19,147\n22,54\n236,252\n79,207\n137,139\n111,239\n193,201\n67,71\n229,231\n20,148\n52,180\n206,238\n237,253\n112,240\n8,12\n0,8\n147,179\n251,255\n53,181\n207,239\n85,213\n192,196\n41,45\n4,5\n33,41\n52,54\n26,154\n21,85\n148,180\n86,214\n144,146\n118,246\n225,229\n204,206\n34,42\n74,78\n236,238\n27,155\n66,74\n85,87\n54,118\n13,77\n119,247\n177,179\n7,15\n146,210\n226,230\n237,239\n67,75\n107,111\n60,188\n70,71\n99,107\n214,246\n130,131\n48,52\n1,129\n179,243\n28,92\n100,108\n21,53\n93,221\n132,140\n200,204\n192,200\n232,236\n81,85\n44,45\n61,125\n205,237\n133,141\n20,84\n152,154\n126,254\n165,173\n153,217\n233,237\n196,197\n2,66\n146,178\n225,233\n114,118\n244,246\n166,174\n87,119\n185,187\n96,97\n18,19\n25,153\n35,99\n147,151\n28,60\n188,189\n88,120\n170,171\n199,207\n48,56\n0,16\n80,88\n29,61\n160,224\n240,244\n25,27\n153,185\n81,89\n2,34\n162,163\n33,49\n59,187\n213,245\n144,145\n94,126\n254,255\n22,30\n0,128\n154,186\n236,237\n122,126\n3,35\n114,122\n66,82\n92,220\n95,127\n55,63\n136,137\n7,23\n33,161\n118,119\n68,100\n147,155\n99,115\n125,253\n228,229\n0,2\n128,160\n210,211\n40,56\n66,194\n92,94\n186,250\n220,252\n69,101\n132,148\n110,111\n168,232\n184,186\n33,35\n7,135\n240,248\n10,42\n224,240\n202,203\n73,89\n99,227\n125,127\n32,48\n84,86\n165,181\n217,219\n14,30\n40,168\n194,226\n106,122\n65,81\n135,167\n214,222\n88,92\n198,214\n47,63\n73,201\n6,22\n76,108\n139,155\n21,29\n40,42\n14,142\n9,73\n98,114\n121,125\n113,121\n132,134\n106,234\n2,6\n39,55\n172,188\n224,226\n54,62\n73,75\n47,175\n42,106\n32,34\n154,158\n107,235\n3,7\n146,154\n165,167\n35,39\n134,198\n72,88\n87,95\n202,234\n80,208\n155,159\n187,191\n34,98\n179,187\n16,80\n128,132\n9,41\n81,209\n180,188\n80,82\n49,113\n129,133\n161,165\n8,72\n114,242\n10,14\n172,174\n2,10\n213,221\n134,166\n232,234\n55,183\n162,166\n194,198\n41,105\n75,107\n231,247\n3,11\n43,47\n84,85\n35,43\n246,254\n23,87\n176,177\n16,48\n195,199\n227,231\n36,44\n68,76\n250,251\n56,120\n17,49\n136,140\n128,136\n15,79\n168,172\n160,168\n58,59\n69,77\n150,151\n101,109\n167,231\n201,233\n169,173\n161,169\n48,112\n82,114\n242,243\n142,174\n224,225\n30,94\n205,221\n102,110\n23,55\n32,33\n13,29\n83,115\n202,206\n194,202\n51,55\n124,125\n105,121\n21,149\n141,205\n24,56\n135,143\n22,86\n216,217\n113,241\n9,13\n46,62\n235,239\n198,199\n227,235\n138,154\n6,7\n54,182\n174,238\n208,240\n13,141\n55,119\n89,121\n230,246\n98,99\n42,46\n21,23\n79,95\n149,181\n190,191\n30,62\n113,115\n87,215\n171,187\n90,122\n172,173\n205,207\n75,79\n2,18\n28,156\n148,212\n13,15\n31,63\n204,220\n72,73\n16,20\n120,248\n105,107\n164,165\n35,51\n61,189\n181,245\n215,247\n64,96\n17,21\n49,53\n28,30\n2,130\n156,188\n5,37\n68,84\n94,222\n120,122\n201,205\n238,254\n50,54\n160,176\n82,86\n61,63\n35,163\n20,22\n134,142\n101,117\n127,255\n153,155\n112,114\n234,238\n83,87\n115,119\n68,196\n63,127\n222,254\n1,17\n53,55\n24,28\n16,24\n56,60\n145,147\n101,229\n38,39\n208,212\n57,61\n49,57\n89,93\n68,70\n37,101\n160,162\n209,213\n241,245\n90,94\n82,90\n101,103\n12,13\n180,244\n60,62\n29,93\n23,31\n104,105\n242,246\n11,75\n1,3\n83,91\n4,36\n123,127\n115,123\n212,214\n93,95\n62,126\n64,68\n44,108\n154,218\n116,124\n3,67\n193,209\n226,234\n46,47\n245,247\n78,79\n216,220\n208,216\n248,252\n97,101\n138,139\n167,175\n155,219\n187,251\n149,157\n36,100\n70,102\n230,231\n249,253\n130,162\n241,249\n18,82\n128,192\n11,43\n20,21\n188,252\n52,53\n71,103\n182,190\n112,113\n9,137\n129,193\n161,225\n204,205\n10,74\n252,254\n34,50\n215,223\n64,72\n193,195\n42,170\n162,226\n196,228\n26,27\n155,187\n43,107\n5,13\n86,87\n67,83\n137,169\n135,199\n97,105\n18,50\n178,179\n75,203\n8,24\n34,162\n78,110\n238,239\n148,156\n100,116\n16,144\n136,200\n19,51\n129,161\n192,208\n60,61\n108,236\n41,57\n67,195\n221,253\n152,153\n181,189\n133,149\n49,177\n169,233\n203,235\n212,213\n8,136\n244,245\n225,241\n74,90\n100,228\n144,176\n108,110\n82,210\n166,182\n15,31\n51,115\n41,169\n85,117\n195,227\n226,242\n126,127\n107,123\n23,151\n143,207\n8,10\n26,58\n130,134\n136,168\n167,183\n186,187\n199,215\n115,243\n11,15\n218,219\n100,102\n74,202\n77,109\n140,156\n56,184\n192,194\n210,242\n41,43\n15,143\n163,167\n200,216\n232,248\n4,12\n133,135\n151,183\n104,108\n141,157\n173,189\n89,217\n225,227\n252,253\n48,176\n233,249\n37,45\n56,58\n30,158\n137,141\n143,175\n174,190\n96,100\n206,222\n18,22\n70,78\n89,91\n0,1\n48,50\n22,150\n17,81\n170,174\n207,223\n19,23\n239,255\n92,93\n140,142\n200,202\n184,185\n81,83\n163,171\n50,114\n203,207\n141,143\n173,175\n142,206\n144,148\n25,57\n233,235\n34,35\n66,67\n196,204\n158,159\n175,239\n';
+        updateGraph();
+        animate();
+    </script>
+</body>
+</html>
